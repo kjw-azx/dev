@@ -7,7 +7,7 @@ description: >-
   optionally posts it as a draft review. Use when the user asks to review a PR,
   review the current branch, run a code review, double-check a diff before
   merging, or get review comments.
-allowed-tools: Bash, Read, Write, Edit, Glob, Grep, Agent, WebFetch
+allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch
 ---
 
 # Dual code review
@@ -74,30 +74,34 @@ them literally into the subagent prompts and the payload.
 
 ## Step 1 — Dispatch both reviewers in parallel
 
-Issue **both** of the following in a **single message** so they run concurrently.
-Both calls are blocking, so when both return you know both reviews are complete —
-that is the completion signal (no polling needed). The Codex call runs
-synchronously via `codex exec`, so it finishes when the Bash call returns.
+Both reviewers run as **blocking shell commands**, so this skill works whether
+the orchestrator is Claude or Codex — neither half depends on a host-specific
+agent tool. Issue **both** commands so they run concurrently (run them in the
+background and `wait`, or issue both in a single message if your host runs Bash
+calls in parallel). Both are blocking, so when both return you know both reviews
+are complete — that is the completion signal, no polling needed.
 
-### 1a. Claude reviewer — `Agent` tool
+### 1a. Claude reviewer — Claude Code CLI (blocking)
 
-Spawn a `general-purpose` agent with a prompt like:
+Run Claude Code headlessly with `claude -p`. It writes its own file:
 
-> You are reviewing only the changes this branch introduced. Use **exactly** this
-> command to see the diff and do not diff against anything else:
-> `git diff --merge-base "origin/<BASE>" HEAD` (changed files:
-> `git diff --merge-base "origin/<BASE>" HEAD --name-only`).
->
-> Review for correctness bugs, security issues, broken edge cases, and clear
-> regressions. For each finding record: file path, the **line number in the new
-> version of the file** (the right/added side), severity, a concise explanation,
-> and a suggested fix. Only flag lines that appear in the diff.
->
-> Write your findings as Markdown to `review-claude.md` and nothing else to it.
+```bash
+claude -p "Review ONLY the changes this branch introduced. Use exactly this \
+command to view the diff, do not diff against anything else: \
+git diff --merge-base origin/$BASE HEAD  (file list: same command with --name-only). \
+Review for correctness bugs, security issues, broken edge cases, and regressions. \
+For each finding give: file path, the line number on the NEW/right side of the \
+diff, severity, explanation, and a suggested fix. Only flag lines present in the \
+diff. Write your findings as Markdown to review-claude.md in the repo root." \
+  --permission-mode bypassPermissions
+```
 
-Substitute the real base branch for `<BASE>`.
+(In the dev container `claude` already defaults to bypass permissions via
+`~/.claude/settings.json`; the explicit flag keeps it working elsewhere. If
+`claude` is unavailable or errors, capture stderr, tell the user the Claude half
+was skipped, and continue with the Codex findings only — do not abort.)
 
-### 1b. Codex reviewer — `Bash` tool (blocking)
+### 1b. Codex reviewer — Codex CLI (blocking)
 
 Run the Codex CLI non-interactively. It writes its own file:
 
@@ -113,6 +117,17 @@ diff. Write your findings as Markdown to review-codex.md in the repo root."
 
 If `codex exec` is unavailable or errors, capture stderr, tell the user the Codex
 half was skipped, and continue with the Claude findings only — do not abort.
+
+### Running both at once
+
+To run the two reviewers concurrently from a single shell, background them and
+`wait`:
+
+```bash
+claude -p "<claude prompt above>" --permission-mode bypassPermissions &
+codex exec "<codex prompt above>" &
+wait
+```
 
 After both return, confirm `review-claude.md` and `review-codex.md` exist and are
 non-empty before continuing.
