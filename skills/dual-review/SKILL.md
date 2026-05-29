@@ -130,8 +130,14 @@ git diff --merge-base $BASE HEAD  (file list: same command with --name-only). \
 Review for correctness bugs, security issues, broken edge cases, and regressions. \
 For each finding give: file path, the line number on the NEW/right side of the \
 diff, severity, explanation, and a suggested fix. Only flag lines present in the \
-diff. Write your findings as Markdown to review-codex.md in the repo root."
+diff. Write your findings as Markdown to review-codex.md in the repo root." \
+  < /dev/null
 ```
+
+**Always redirect codex's stdin from `/dev/null`.** `codex exec` reads *additional*
+input from stdin on top of the prompt arg; with no terminal (e.g. backgrounded
+with `&`) its stdin stays open and it blocks forever waiting for input that never
+arrives. `< /dev/null` gives it immediate EOF so it proceeds with just the prompt.
 
 If `codex exec` is unavailable or errors, capture stderr, tell the user the Codex
 half was skipped, and continue with the Claude findings only — do not abort.
@@ -143,9 +149,13 @@ To run the two reviewers concurrently from a single shell, background them and
 
 ```bash
 claude -p "<claude prompt above>" --permission-mode bypassPermissions &
-codex exec "<codex prompt above>" &
+codex exec "<codex prompt above>" < /dev/null &
 wait
 ```
+
+The `< /dev/null` on codex is **required** here — without it the backgrounded
+codex process hangs forever reading stdin (see note above), and `wait` never
+returns.
 
 After both return, confirm `review-claude.md` and `review-codex.md` exist and are
 non-empty before continuing.
