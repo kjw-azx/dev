@@ -37,38 +37,56 @@ All artifacts are written to the repo root (gitignore them if needed):
 
 ## Step 0 — Establish scope (run these yourself, first)
 
+Resolve the base ref **entirely from local data — no network calls** (no
+`gh`, no `git fetch`, no `git remote show`; a dev container may have no GitHub
+access at all). `git merge-base` and the diff commands all operate on the local
+object store.
+
 ```bash
-# Base branch: the PR target if there's a PR, else the remote's default branch.
-BASE=$(gh pr view --json baseRefName -q .baseRefName 2>/dev/null || true)
+# 1) If the user named a base branch, honor it; else use $REVIEW_BASE if set.
+BASE="${REVIEW_BASE:-}"
+
+# 2) Else use the remote's default branch as recorded locally at clone time.
+#    (refs/remotes/origin/HEAD is a local symref — reading it hits no network.)
+[ -z "$BASE" ] && BASE="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null || true)"
+
+# 3) Else fall back to the first base ref that actually exists locally.
 if [ -z "$BASE" ]; then
-  BASE=$(git remote show origin | sed -n 's/.*HEAD branch: //p')
+  for cand in origin/main origin/master main master develop trunk; do
+    if git rev-parse --verify --quiet "$cand" >/dev/null; then BASE="$cand"; break; fi
+  done
 fi
-git fetch origin "$BASE" --quiet
+[ -n "$BASE" ] || { echo "could not determine a base ref locally; set REVIEW_BASE" >&2; exit 1; }
 
 HEAD_SHA=$(git rev-parse HEAD)
-MERGE_BASE=$(git merge-base "origin/$BASE" HEAD)
+MERGE_BASE=$(git merge-base "$BASE" HEAD)   # purely local
 
-echo "Base branch : $BASE"
-echo "Merge base  : $MERGE_BASE"
-echo "Head SHA    : $HEAD_SHA"
+echo "Base ref   : $BASE"
+echo "Merge base : $MERGE_BASE"
+echo "Head SHA   : $HEAD_SHA"
 ```
+
+`$BASE` is a full ref (e.g. `origin/main` or `main`) — use it verbatim, do **not**
+prefix it with `origin/` again. If `origin/HEAD` is unset and the fallback picks
+the wrong branch, the user can pin it without any network via
+`git remote set-head origin <branch>` or by passing `REVIEW_BASE`.
 
 The **canonical diff command** every reviewer must use:
 
 ```bash
-git diff --merge-base "origin/$BASE" HEAD
+git diff --merge-base "$BASE" HEAD
 ```
 
-(equivalently `git diff origin/$BASE...HEAD` — three dots — which also diffs from
-the merge base). Get the changed-file list and per-file diffs with the same base:
+(equivalently `git diff "$BASE"...HEAD` — three dots — which also diffs from the
+merge base). Get the changed-file list and per-file diffs with the same base:
 
 ```bash
-git diff --merge-base "origin/$BASE" HEAD --name-only        # files in scope
-git diff --merge-base "origin/$BASE" HEAD -- <path>          # one file's diff
+git diff --merge-base "$BASE" HEAD --name-only        # files in scope
+git diff --merge-base "$BASE" HEAD -- <path>          # one file's diff
 ```
 
-Note the values of `$BASE`, `$MERGE_BASE`, and `$HEAD_SHA` — you will substitute
-them literally into the subagent prompts and the payload.
+Note the resolved values of `$BASE`, `$MERGE_BASE`, and `$HEAD_SHA` — you will
+substitute them literally into the subagent prompts and the payload.
 
 ---
 
@@ -88,7 +106,7 @@ Run Claude Code headlessly with `claude -p`. It writes its own file:
 ```bash
 claude -p "Review ONLY the changes this branch introduced. Use exactly this \
 command to view the diff, do not diff against anything else: \
-git diff --merge-base origin/$BASE HEAD  (file list: same command with --name-only). \
+git diff --merge-base $BASE HEAD  (file list: same command with --name-only). \
 Review for correctness bugs, security issues, broken edge cases, and regressions. \
 For each finding give: file path, the line number on the NEW/right side of the \
 diff, severity, explanation, and a suggested fix. Only flag lines present in the \
@@ -108,7 +126,7 @@ Run the Codex CLI non-interactively. It writes its own file:
 ```bash
 codex exec "Review ONLY the changes this branch introduced. Use exactly this \
 command to view the diff, do not diff against anything else: \
-git diff --merge-base origin/$BASE HEAD  (file list: same command with --name-only). \
+git diff --merge-base $BASE HEAD  (file list: same command with --name-only). \
 Review for correctness bugs, security issues, broken edge cases, and regressions. \
 For each finding give: file path, the line number on the NEW/right side of the \
 diff, severity, explanation, and a suggested fix. Only flag lines present in the \
@@ -156,7 +174,7 @@ non-empty before continuing.
 
 For each confirmed/unverified finding, prepare a GitHub review comment. **Every
 comment must land on a line that is part of the diff under review** — re-check
-against `git diff --merge-base "origin/$BASE" HEAD -- <path>` and confirm the line
+against `git diff --merge-base "$BASE" HEAD -- <path>` and confirm the line
 appears as an added (`+`) or context line in a hunk on the right side. If a finding
 is real but its line isn't in the diff, fold it into the review **body** instead of
 making it an inline comment (the API rejects comments outside the diff).

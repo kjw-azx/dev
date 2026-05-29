@@ -69,7 +69,7 @@ Multi-line comment (a range):
 ## Verifying a line is in the diff
 
 ```bash
-git diff --merge-base "origin/$BASE" HEAD -- <path>
+git diff --merge-base "$BASE" HEAD -- <path>
 ```
 
 Only `+` (added) and unprefixed (context) lines on the right side are valid
